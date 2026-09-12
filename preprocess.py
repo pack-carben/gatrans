@@ -1,4 +1,5 @@
 import argparse
+import time
 
 from config import DATASET_DIR, ModelConfig
 from utils.io import ensure_dirs, load_h5, save_processed, seed_everything
@@ -23,7 +24,11 @@ def main():
 
     config = ModelConfig(dataset=args.dataset, n_graphs=args.n_graphs, n_neighbors=args.n_neighbors)
     h5_path = args.h5 or DATASET_DIR / f"{args.dataset}_multiomics.h5"
+    started = time.perf_counter()
+    print(f"Loading HDF5: {h5_path}...", flush=True)
     data = load_h5(h5_path)
+    print(f"Loaded in {time.perf_counter() - started:.2f}s; "
+          f"network={data['network'].shape}, features={data['features'].shape}", flush=True)
     if args.engine == "cugraph":
         from utils.cugraph_backend import build_cugraph_from_adjacency
 
@@ -58,6 +63,7 @@ def main():
     if data.get("gene_names") is not None:
         arrays["gene_names"] = data["gene_names"]
 
+    print(f"Compressing and saving {config.processed_path}...", flush=True)
     save_processed(config.processed_path, **arrays)
     print(f"Saved processed data to {config.processed_path}")
 

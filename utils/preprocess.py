@@ -1,4 +1,5 @@
 import random
+import time
 from collections import deque
 from typing import List, Tuple
 
@@ -28,14 +29,16 @@ def random_walk(start: int, neighbors: List[np.ndarray], walk_length: int) -> Li
 
 def shortest_path_in_subgraph(seed_nodes: np.ndarray, neighbors: List[np.ndarray]) -> np.ndarray:
     """Compute distances only inside one sampled subgraph to avoid an N x N matrix."""
-    index = {int(node): pos for pos, node in enumerate(seed_nodes)}
+    index = {}
+    for pos, node in enumerate(seed_nodes):
+        index.setdefault(int(node), []).append(pos)
     size = len(seed_nodes)
     distance = np.full((size, size), -1, dtype=np.float32)
 
     for source_pos, source_node in enumerate(seed_nodes):
         queue = deque([(int(source_node), 0)])
         seen = {int(source_node)}
-        distance[source_pos, source_pos] = 0
+        distance[source_pos, index[int(source_node)]] = 0
 
         while queue:
             node, depth = queue.popleft()
@@ -58,11 +61,19 @@ def build_subgraphs(
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Generate random-walk channels and per-channel spatial distance matrices."""
     random.seed(seed)
+    if n_graphs < 1 or n_neighbors < 1:
+        raise ValueError("n_graphs and n_neighbors must be positive.")
+    started = time.perf_counter()
+    print("Converting adjacency matrix to neighbor lists...", flush=True)
     neighbors, degrees = adjacency_to_neighbors(adj)
     n_nodes = len(neighbors)
+    print(f"Graph: nodes={n_nodes}, edge_rows={degrees.sum()}, isolated={(degrees == 0).sum()}; "
+          f"conversion={time.perf_counter() - started:.2f}s", flush=True)
 
     node_neighbor = np.zeros((n_nodes, n_graphs, n_neighbors), dtype=np.int64)
     spatial_matrix = np.zeros((n_nodes, n_graphs, n_neighbors, n_neighbors), dtype=np.float32)
+    print(f"Sampling {n_nodes * n_graphs} subgraphs; output arrays="
+          f"{(node_neighbor.nbytes + spatial_matrix.nbytes) / 2**20:.1f} MiB", flush=True)
 
     for node_id in tqdm(range(n_nodes), desc="building sampled subgraphs"):
         for graph_id in range(n_graphs):
@@ -70,4 +81,5 @@ def build_subgraphs(
             node_neighbor[node_id, graph_id] = walk
             spatial_matrix[node_id, graph_id] = shortest_path_in_subgraph(walk, neighbors)
 
+    print(f"Graph preprocessing completed in {time.perf_counter() - started:.2f}s", flush=True)
     return node_neighbor, spatial_matrix, degrees

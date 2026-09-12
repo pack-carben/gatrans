@@ -1,10 +1,12 @@
 import argparse
 import json
+import time
 
 import numpy as np
 import torch
 from torch import nn
 from torch.utils.data import DataLoader
+from tqdm.auto import tqdm
 
 from config import ModelConfig
 from models import TREE
@@ -24,12 +26,12 @@ def parse_args():
     return parser.parse_args()
 
 
-def collect_logits(model, loader, device):
+def collect_logits(model, loader, device, desc="Evaluating"):
     model.eval()
     logits_all = []
     labels_all = []
     with torch.no_grad():
-        for node_id, label in loader:
+        for node_id, label in tqdm(loader, desc=desc, leave=False, mininterval=2):
             logits = model(node_id.to(device))
             logits_all.append(logits.cpu().numpy())
             labels_all.append(label.numpy())
@@ -38,6 +40,9 @@ def collect_logits(model, loader, device):
 
 def main():
     args = parse_args()
+    if args.epochs < 1 or args.batch_size < 1:
+        raise ValueError("epochs and batch-size must be positive.")
+    started = time.perf_counter()
     seed_everything(42)
     ensure_dirs()
 
@@ -49,6 +54,7 @@ def main():
         batch_size=args.batch_size,
         learning_rate=args.lr,
     )
+    print(f"Loading {config.processed_path}...", flush=True)
     arrays = load_processed(config.processed_path)
     device = torch.device(args.device)
 
@@ -59,6 +65,8 @@ def main():
         arrays["mask_test"],
     )
     positive_ratio = float(max(y_train.mean(), 1e-6))
+    print(f"device={device}; train={len(train_id)}, val={len(val_id)}, test={len(test_id)}; "
+          f"train positive ratio={positive_ratio:.4f}", flush=True)
     pos_weight = torch.tensor([(1.0 - positive_ratio) / positive_ratio], device=device)
 
     model = TREE(
@@ -75,6 +83,8 @@ def main():
         d_sp_enc=config.d_sp_enc,
         dropout=config.dropout,
     ).to(device)
+    print(f"Model ready: {sum(p.numel() for p in model.parameters()):,} parameters; "
+          f"startup={time.perf_counter() - started:.2f}s", flush=True)
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=config.learning_rate, weight_decay=config.weight_decay)
     criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
@@ -86,33 +96,42 @@ def main():
     best_auc = -1.0
     wait = 0
     for epoch in range(1, config.epochs + 1):
+        epoch_started = time.perf_counter()
         model.train()
         losses = []
-        for node_id, label in train_loader:
+        progress = tqdm(train_loader, desc=f"Train {epoch}/{config.epochs}", mininterval=2)
+        for node_id, label in progress:
             node_id = node_id.to(device)
             label = label.to(device)
             optimizer.zero_grad(set_to_none=True)
             loss = criterion(model(node_id), label)
+            if not torch.isfinite(loss):
+                raise RuntimeError(f"Non-finite training loss at epoch {epoch}.")
             loss.backward()
             optimizer.step()
-            losses.append(float(loss.detach().cpu()))
+            losses.append((float(loss.detach().cpu()), len(label)))
+            progress.set_postfix(loss=f"{losses[-1][0]:.5f}", refresh=False)
 
         val_logits, val_labels = collect_logits(model, val_loader, device)
         val_metrics = binary_metrics(val_labels, val_logits)
-        print(f"epoch={epoch} loss={np.mean(losses):.5f} val={val_metrics}")
+        mean_loss = sum(value * count for value, count in losses) / len(train_id)
+        print(f"epoch={epoch} loss={mean_loss:.5f} val={val_metrics} "
+              f"elapsed={time.perf_counter() - epoch_started:.2f}s", flush=True)
 
         if val_metrics["auc"] > best_auc:
             best_auc = val_metrics["auc"]
             wait = 0
             torch.save({"model": model.state_dict(), "config": config.__dict__}, config.checkpoint_path)
+            print(f"Saved best checkpoint: {config.checkpoint_path}", flush=True)
         else:
             wait += 1
             if wait >= config.patience:
+                print(f"Early stopping after {wait} epochs without improvement.", flush=True)
                 break
 
     checkpoint = torch.load(config.checkpoint_path, map_location=device)
     model.load_state_dict(checkpoint["model"])
-    test_logits, test_labels = collect_logits(model, test_loader, device)
+    test_logits, test_labels = collect_logits(model, test_loader, device, desc="Testing")
     test_metrics = binary_metrics(test_labels, test_logits)
     print(json.dumps({"best_val_auc": best_auc, "test": test_metrics}, indent=2))
 
