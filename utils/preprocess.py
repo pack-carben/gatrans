@@ -32,23 +32,32 @@ def shortest_path_in_subgraph(seed_nodes: np.ndarray, neighbors: List[np.ndarray
     index = {}
     for pos, node in enumerate(seed_nodes):
         index.setdefault(int(node), []).append(pos)
+    unique_nodes = np.asarray(list(index), dtype=np.int64)
+    # Intersect once per unique node, rather than scanning full-graph neighbors
+    # again at every BFS depth and for every repeated random-walk occurrence.
+    local_neighbors = {
+        int(node): unique_nodes[np.isin(unique_nodes, neighbors[int(node)], assume_unique=True)]
+        for node in unique_nodes
+    }
     size = len(seed_nodes)
     distance = np.full((size, size), -1, dtype=np.float32)
 
-    for source_pos, source_node in enumerate(seed_nodes):
+    for source_node, source_positions in index.items():
+        source_pos = source_positions[0]
         queue = deque([(int(source_node), 0)])
         seen = {int(source_node)}
         distance[source_pos, index[int(source_node)]] = 0
 
         while queue:
             node, depth = queue.popleft()
-            for nxt in neighbors[node]:
+            for nxt in local_neighbors[node]:
                 nxt = int(nxt)
                 if nxt not in index or nxt in seen:
                     continue
                 seen.add(nxt)
                 distance[source_pos, index[nxt]] = depth + 1
                 queue.append((nxt, depth + 1))
+        distance[source_positions] = distance[source_pos]
 
     return distance
 

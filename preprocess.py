@@ -13,7 +13,8 @@ def parse_args():
     parser.add_argument("--n-graphs", type=int, default=6)
     parser.add_argument("--n-neighbors", type=int, default=8)
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--engine", choices=["cpu", "cugraph"], default="cpu")
+    parser.add_argument("--engine", choices=["cpu", "cuda", "cugraph"], default="cpu")
+    parser.add_argument("--graph-batch-size", type=int, default=512)
     return parser.parse_args()
 
 
@@ -36,11 +37,20 @@ def main():
         print(f"cuGraph graph created with {len(edge_frame)} directed edge rows.")
         print("Using the compatible sampled-subgraph writer; replace build_subgraphs when RAPIDS version is fixed.")
 
-    node_neighbor, spatial_matrix, node_degree = build_subgraphs(
+    builder = build_subgraphs
+    builder_options = {}
+    if args.engine == "cuda":
+        from utils.cuda_preprocess import build_subgraphs_cuda
+
+        builder = build_subgraphs_cuda
+        builder_options["batch_size"] = args.graph_batch_size
+
+    node_neighbor, spatial_matrix, node_degree = builder(
         data["network"],
         n_graphs=args.n_graphs,
         n_neighbors=args.n_neighbors,
         seed=args.seed,
+        **builder_options,
     )
 
     y = data["y_train"].copy()
