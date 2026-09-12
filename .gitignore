@@ -1,3 +1,8 @@
 dataset/
 venv/
 test/
+processed/
+checkpoints/
+logs/
+__pycache__/
+*.pyc

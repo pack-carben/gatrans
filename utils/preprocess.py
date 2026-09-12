@@ -1,0 +1,73 @@
+import random
+from collections import deque
+from typing import List, Tuple
+
+import numpy as np
+from scipy import sparse
+from tqdm import tqdm
+
+
+def adjacency_to_neighbors(adj: np.ndarray) -> Tuple[List[np.ndarray], np.ndarray]:
+    """Convert a dense adjacency matrix to neighbor lists and node degrees."""
+    graph = sparse.csr_matrix(adj > 0)
+    degrees = np.diff(graph.indptr).astype(np.int64)
+    neighbors = [graph.indices[graph.indptr[i] : graph.indptr[i + 1]] for i in range(graph.shape[0])]
+    return neighbors, degrees
+
+
+def random_walk(start: int, neighbors: List[np.ndarray], walk_length: int) -> List[int]:
+    walk = [start]
+    while len(walk) < walk_length:
+        current_neighbors = neighbors[walk[-1]]
+        if len(current_neighbors) == 0:
+            walk.append(walk[-1])
+        else:
+            walk.append(int(random.choice(current_neighbors)))
+    return walk
+
+
+def shortest_path_in_subgraph(seed_nodes: np.ndarray, neighbors: List[np.ndarray]) -> np.ndarray:
+    """Compute distances only inside one sampled subgraph to avoid an N x N matrix."""
+    index = {int(node): pos for pos, node in enumerate(seed_nodes)}
+    size = len(seed_nodes)
+    distance = np.full((size, size), -1, dtype=np.float32)
+
+    for source_pos, source_node in enumerate(seed_nodes):
+        queue = deque([(int(source_node), 0)])
+        seen = {int(source_node)}
+        distance[source_pos, source_pos] = 0
+
+        while queue:
+            node, depth = queue.popleft()
+            for nxt in neighbors[node]:
+                nxt = int(nxt)
+                if nxt not in index or nxt in seen:
+                    continue
+                seen.add(nxt)
+                distance[source_pos, index[nxt]] = depth + 1
+                queue.append((nxt, depth + 1))
+
+    return distance
+
+
+def build_subgraphs(
+    adj: np.ndarray,
+    n_graphs: int,
+    n_neighbors: int,
+    seed: int = 42,
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Generate random-walk channels and per-channel spatial distance matrices."""
+    random.seed(seed)
+    neighbors, degrees = adjacency_to_neighbors(adj)
+    n_nodes = len(neighbors)
+
+    node_neighbor = np.zeros((n_nodes, n_graphs, n_neighbors), dtype=np.int64)
+    spatial_matrix = np.zeros((n_nodes, n_graphs, n_neighbors, n_neighbors), dtype=np.float32)
+
+    for node_id in tqdm(range(n_nodes), desc="building sampled subgraphs"):
+        for graph_id in range(n_graphs):
+            walk = np.asarray(random_walk(node_id, neighbors, n_neighbors), dtype=np.int64)
+            node_neighbor[node_id, graph_id] = walk
+            spatial_matrix[node_id, graph_id] = shortest_path_in_subgraph(walk, neighbors)
+
+    return node_neighbor, spatial_matrix, degrees
