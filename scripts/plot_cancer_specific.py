@@ -16,6 +16,7 @@ from scripts.paper_sources import read_tables
 
 OMICS = ['SNV', 'METH', 'GE', 'CNA']
 COLORS = ['#517bb2', '#8cbbd4', '#f3d88c', '#d95847']
+RUN_LABEL = ''
 
 
 def tidy(table):
@@ -26,7 +27,9 @@ def tidy(table):
 
 
 def save(fig, out, name):
-    fig.tight_layout()
+    if RUN_LABEL:
+        fig.text(.5, .005, RUN_LABEL, ha='center', fontsize=8, color='#555555')
+    fig.tight_layout(rect=(0, .03, 1, 1))
     fig.savefig(out / (name + '.png'), dpi=200, bbox_inches='tight')
     fig.savefig(out / (name + '.svg'), bbox_inches='tight')
     plt.close(fig)
@@ -51,6 +54,10 @@ def main():
     p.add_argument('--sources', default='results/paper_sources')
     args = p.parse_args()
     run, sources = Path(args.run), Path(args.sources)
+    global RUN_LABEL
+    configurations = [json.loads(p.read_text()) for p in run.glob('*/*/run_config.json')]
+    pilot = any(c['folds'] < 10 or c['epochs'] < 100 for c in configurations)
+    RUN_LABEL = ('PILOT - pipeline validation only. ' if pilot else 'Fixed-configuration GATrans evaluation. ') + run.name
     out = run / 'figures'
     out.mkdir(parents=True, exist_ok=True)
     plt.rcParams.update({'font.family': 'DejaVu Sans', 'font.size': 9, 'axes.spines.top': False,
@@ -149,8 +156,10 @@ def main():
             for ax, values, title in [(axs[0], ref, 'Paper Fig. 3a cancer-specific'), (axs[1], v.reindex(order), f'GATrans {kind} (fold 0)')]:
                 left = np.zeros(len(values))
                 for omic, color in zip(OMICS, COLORS):
-                    ax.barh(order, values[omic], left=left, color=color, label=omic)
+                    ax.barh(np.arange(len(order)), values[omic], left=left, color=color, label=omic)
                     left += values[omic].fillna(0).to_numpy()
+                ax.set_yticks(np.arange(len(order)), order)
+                ax.set_ylim(-.5, len(order)-.5)
                 ax.invert_yaxis()
                 ax.set(xlim=(0,1), xlabel='Normalized omics importance', title=title)
             delta = v.reindex(order) - ref
@@ -189,7 +198,8 @@ def main():
                 own = own.reindex(columns=paper.columns)
                 fig, axs = plt.subplots(2,1, figsize=(11,4.5))
                 lim = max(np.abs(paper.to_numpy()).max(), np.nanmax(np.abs(own.to_numpy())), 1e-8)
-                heat(axs[0], paper, f'{gene}: original Fig. 3e, pan-cancer feature-split experiment', True, lim)
+                im_paper = heat(axs[0], paper, f'{gene}: original Fig. 3e, pan-cancer feature-split experiment', True, lim)
+                fig.colorbar(im_paper, ax=axs[0], fraction=.025, label='Signed SHAP')
                 im = heat(axs[1], own, f'{gene}: GATrans {kind}, independently trained cancer models\nDifferent experiment; visual reference only', True, lim)
                 fig.colorbar(im, ax=axs[1], fraction=.025, label='Signed SHAP')
                 save(fig, out, 'gene_' + gene + '_' + kind)
