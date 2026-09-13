@@ -123,7 +123,7 @@ def main():
         # Descriptive cancer specificity: probability spread across cancer networks.
         unlabelled = predictions[(predictions.kind == kind) & (predictions.split == 'unlabelled')]
         matrix = unlabelled.pivot(index='gene', columns='cancer', values='prediction')
-        matrix = matrix[matrix.notna().sum(axis=1) >= min(2, len(matrix.columns))]
+        matrix = matrix[matrix.notna().sum(axis=1) >= 2]
         if len(matrix):
             spread = matrix.max(axis=1) - matrix.min(axis=1)
             selected = spread.sort_values(ascending=False).head(20).index

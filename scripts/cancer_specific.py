@@ -306,7 +306,11 @@ def main():
         raise FileNotFoundError('No matching datasets')
     for path in files:
         write_json(out / 'status.json', dict(status='running', dataset=str(path), total_datasets=len(files)))
-        run_dataset(path, out, args)
+        try:
+            run_dataset(path, out, args)
+        except Exception as error:
+            write_json(out / 'status.json', dict(status='failed', dataset=str(path), error=str(error)))
+            raise
     write_json(out / 'status.json', dict(status='completed', datasets=len(files)))
 
 
