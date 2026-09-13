@@ -63,9 +63,16 @@ def feature_names(data, cancer, kind, root):
             pairs = [(i, lookup[n]) for i, n in enumerate(decode(data['gene_names'])) if n in lookup]
             left = data['features'][[i for i, _ in pairs]]
             right = h['features'][:][[i for _, i in pairs]][:, selected]
-            if not len(pairs) or not np.allclose(left, right, atol=1e-6):
+            mismatch = ~np.isclose(left, right, atol=1e-6)
+            if not len(pairs) or np.any(mismatch.mean(axis=0) > .01):
                 raise ValueError('Four-column mapping failed cross-network validation')
             note += f'; validated on {len(pairs)} matching genes against 64-column heterogeneous data'
+            if mismatch.any():
+                source_genes = decode(data['gene_names'])
+                differences = [dict(gene=source_genes[pairs[r][0]], omics=OMICS[c],
+                                    homogeneous=float(left[r, c]), heterogeneous=float(right[r, c]))
+                               for r, c in zip(*np.where(mismatch))]
+                note += '; source value exceptions (inputs preserved): ' + json.dumps(differences)
     else:
         note += '; no heterogeneous ESCA counterpart exists; mapping is a documented assumption'
     return [n + ': ' + cancer for n in OMICS], note
@@ -165,14 +172,24 @@ def run_dataset(path, out, args):
     kind, cancer = path.parent.name, path.name.split('_')[0]
     dest = out / kind / cancer
     dest.mkdir(parents=True, exist_ok=True)
-    signature = {k: v for k, v in vars(args).items() if k not in ('out', 'cancers', 'kinds')}
+    signature = {k: v for k, v in vars(args).items() if k not in ('out', 'cancers', 'kinds', 'resume')}
     with path.open('rb') as source:
         signature['data_sha256'] = hashlib.file_digest(source, 'sha256').hexdigest()
     signature['git_commit'] = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
     signature_file = dest / 'run_config.json'
-    if signature_file.exists() and json.loads(signature_file.read_text()) != signature:
-        raise ValueError(f'Run configuration changed; use a different output directory: {dest}')
-    write_json(signature_file, signature)
+    if signature_file.exists():
+        prior = json.loads(signature_file.read_text())
+        if prior != signature:
+            comparable = lambda config: {k:v for k,v in config.items() if k != 'git_commit'}
+            if not args.resume or comparable(prior) != comparable(signature):
+                raise ValueError(f'Run configuration changed; use a different output directory: {dest}')
+            events_path = dest / 'resume_events.json'
+            events = json.loads(events_path.read_text()) if events_path.exists() else []
+            events.append(dict(git_commit=signature['git_commit'], time=time.time(),
+                               reason='Explicit resume after code update; numerical settings and data hash unchanged'))
+            write_json(events_path, events)
+    else:
+        write_json(signature_file, signature)
     if (dest / 'complete.json').exists():
         print(f'Already complete: {kind}/{cancer}', flush=True)
         return
@@ -253,7 +270,7 @@ def run_dataset(path, out, args):
         probability = predict(model, np.arange(len(genes)), args.batch_size, args.device)
         np.save(fold_dir / 'predictions.npy', probability)
         pd.DataFrame(history).to_csv(fold_dir / 'history.csv', index=False)
-        write_json(fold_dir / 'metrics.json', dict(fold=fold, best_val_ap=best, epochs=len(history),
+        write_json(fold_dir / 'metrics.json', dict(fold=fold, best_val_ap=best, epochs=len(history), git_commit=signature['git_commit'],
                    **metrics(labels[test_ids], probability[test_ids])))
         fold_predictions.append(probability)
         del model, optim
@@ -294,6 +311,7 @@ def main():
     p.add_argument('--background', type=int, default=32)
     p.add_argument('--shap-samples', type=int, default=200)
     p.add_argument('--shap-limit', type=int, default=0, help='0 explains every correctly predicted test cancer gene')
+    p.add_argument('--resume', action='store_true', help='Allow a new Git revision with identical parameters/data; preserve provenance events')
     args = p.parse_args()
     if not 1 <= args.folds <= 10 or min(args.epochs, args.patience, args.channels, args.neighbors, args.layers, args.batch_size, args.background) < 1:
         p.error('Invalid run sizes')

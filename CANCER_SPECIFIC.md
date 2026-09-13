@@ -66,6 +66,9 @@ Homogeneous HDF5 files have four actual columns but 64 feature names. We map the
 to SNV/METH/GE/CNA for the target cancer and validate against identical values on
 shared genes in the corresponding heterogeneous 64-column file. ESCA has no
 heterogeneous counterpart; its mapping remains an explicit source-order assumption.
+KIRC and THCA each have one gene with a gene-expression value differing between
+the source archives. At least 99% of shared-gene values per column must match;
+all exceptions and both values are recorded, and original inputs remain unchanged.
 
 SHAP explains fold 0 by a predeclared rule; it does not select the best test fold.
 Backgrounds contain only that fold's training nodes. Structure is held fixed and
@@ -86,3 +89,6 @@ AUPRC are both exported to expose metric-definition differences. Seeds, hashes,
 Git revision, training histories, split IDs and all-node scores are preserved.
 The workflow does not guarantee matching or exceeding the paper's accuracy.
 Completion metadata distinguishes pilot runs from full fixed-configuration runs.
+After a reviewed code fix, `--resume` can retain completed folds with unchanged
+numerical arguments and data hashes. Original run provenance and new revision
+events are both preserved; partially trained folds restart from their seed.
