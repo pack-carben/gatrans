@@ -166,7 +166,8 @@ def run_dataset(path, out, args):
     dest = out / kind / cancer
     dest.mkdir(parents=True, exist_ok=True)
     signature = {k: v for k, v in vars(args).items() if k not in ('out', 'cancers', 'kinds')}
-    signature['data_sha256'] = hashlib.file_digest(path.open('rb'), 'sha256').hexdigest()
+    with path.open('rb') as source:
+        signature['data_sha256'] = hashlib.file_digest(source, 'sha256').hexdigest()
     signature['git_commit'] = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
     signature_file = dest / 'run_config.json'
     if signature_file.exists() and json.loads(signature_file.read_text()) != signature:
