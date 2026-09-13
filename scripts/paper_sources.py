@@ -45,7 +45,7 @@ def read_tables(path):
                     v = strings[int(v)]
                 elif c.attrib.get('t') == 'inlineStr':
                     v = ''.join(t.text or '' for t in c.iter() if t.tag.endswith('}t'))
-                elif v is not None and c.attrib.get('t') not in ('str', 'e'):
+                elif v is not None and c.attrib.get('t') not in ('str', 'e', 'd'):
                     v = float(v)
                 if v is not None:
                     cells[row, col - 1] = v
