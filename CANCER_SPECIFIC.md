@@ -59,6 +59,12 @@ These fixed hyperparameters do not reproduce the paper's grid search.
   candidate heatmaps and attention matrices for available selected genes.
 - Every plot is PNG and SVG with supporting CSV. SHAP features are also NPZ.
   Original workbooks, extracted tables and a URL/hash manifest stay in paper_sources.
+  When a paper panel or a trained run lacks a cell needed to keep the visual
+  layout aligned with the published figure, the plotting script writes separate
+  `*_display.csv` tables with neutral display-only placeholders and
+  `*_display_provenance.csv` cell audits. Proportion plots use 0.25 per omics
+  channel for missing rows; signed SHAP and probability heatmaps use 0. The
+  source/observed CSV files preserve missing values unchanged.
 
 ## Interpretation and reproducibility limits
 

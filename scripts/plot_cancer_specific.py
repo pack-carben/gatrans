@@ -17,6 +17,7 @@ from scripts.paper_sources import read_tables
 OMICS = ['SNV', 'METH', 'GE', 'CNA']
 COLORS = ['#517bb2', '#8cbbd4', '#f3d88c', '#d95847']
 RUN_LABEL = ''
+PLACEHOLDER_LABEL = 'display_placeholder'
 
 
 def tidy(table):
@@ -24,6 +25,31 @@ def tidy(table):
     d.index = table.iloc[1:, 0].tolist()
     d.columns = table.iloc[0, 1:].tolist()
     return d.astype(float)
+
+
+def display_complete(frame, index=None, columns=None, fill=0.0, normalize=False):
+    """Return display values plus cell provenance without changing source data.
+
+    The plotting tables keep the visual geometry of the paper even when the
+    paper source, a trained run, or a gene-specific case does not contain every
+    cell. Filled values are neutral placeholders and are exported separately.
+    """
+    values = frame.copy()
+    if index is not None:
+        values = values.reindex(index)
+    if columns is not None:
+        values = values.reindex(columns=columns)
+    original_missing = values.isna()
+    values = values.fillna(fill)
+    if normalize:
+        row_sum = values.sum(axis=1).replace(0, np.nan)
+        values = values.div(row_sum, axis=0).fillna(fill)
+    records = []
+    for row in values.index:
+        for col in values.columns:
+            records.append({'row': row, 'column': col, 'value': float(values.loc[row, col]),
+                            'source': PLACEHOLDER_LABEL if bool(original_missing.loc[row, col]) else 'observed'})
+    return values, pd.DataFrame(records)
 
 
 def save(fig, out, name):
@@ -46,6 +72,19 @@ def heat(ax, frame, title, signed=False, limit=None):
     ax.set_yticks(range(len(frame)), frame.index)
     ax.set_title(title, fontsize=10)
     return im
+
+
+def mark_placeholders(ax, provenance, row_order, col_order):
+    missing = provenance[provenance.source == PLACEHOLDER_LABEL]
+    if missing.empty:
+        return
+    pairs = [(col_order.index(c), row_order.index(r))
+             for r, c in zip(missing.row, missing.column) if r in row_order and c in col_order]
+    xs = [x for x, _ in pairs]
+    ys = [y for _, y in pairs]
+    if xs and ys:
+        ax.scatter(xs, ys, marker='x', c='black', s=18, linewidths=.7,
+                   label='constructed display value')
 
 
 def main():
@@ -134,10 +173,15 @@ def main():
         if len(matrix):
             spread = matrix.max(axis=1) - matrix.min(axis=1)
             selected = spread.sort_values(ascending=False).head(20).index
-            selected_matrix = matrix.loc[selected]
-            selected_matrix.to_csv(out / ('specific_candidates_' + kind + '.csv'))
+            observed_matrix = matrix.loc[selected].reindex(columns=sorted(matrix.columns))
+            selected_matrix, display_provenance = display_complete(
+                observed_matrix, index=selected, columns=sorted(matrix.columns), fill=0.0)
+            observed_matrix.to_csv(out / ('specific_candidates_' + kind + '_observed.csv'))
+            selected_matrix.to_csv(out / ('specific_candidates_' + kind + '_display.csv'))
+            display_provenance.to_csv(out / ('specific_candidates_' + kind + '_display_provenance.csv'), index=False)
             fig, ax = plt.subplots(figsize=(max(6, .45*len(matrix.columns)), 7))
-            im = heat(ax, selected_matrix, 'Exploratory candidates ranked by cross-cancer score range\nUnlabelled only; missing networks are blank')
+            im = heat(ax, selected_matrix, 'Exploratory candidates ranked by cross-cancer score range\nUnlabelled only; x marks are neutral display placeholders')
+            mark_placeholders(ax, display_provenance, list(selected_matrix.index), list(selected_matrix.columns))
             fig.colorbar(im, ax=ax, label='Mean model probability')
             save(fig, out, 'specific_candidates_' + kind)
     if shap_frames:
@@ -153,16 +197,28 @@ def main():
             v.to_csv(out / ('omics_importance_' + kind + '.csv'))
             order = ref.index.tolist()
             fig, axs = plt.subplots(1, 3, figsize=(13, 6), gridspec_kw={'width_ratios':[1,1,1.3]})
-            for ax, values, title in [(axs[0], ref, 'Paper Fig. 3a cancer-specific'), (axs[1], v.reindex(order), f'GATrans {kind} (fold 0)')]:
+            display_ref, ref_provenance = display_complete(ref, index=order, columns=OMICS, fill=.25, normalize=True)
+            display_v, v_provenance = display_complete(v, index=order, columns=OMICS, fill=.25, normalize=True)
+            ref_provenance.to_csv(out / ('paper_fig3a_cancer_specific_display_provenance.csv'), index=False)
+            v_provenance.to_csv(out / ('omics_importance_' + kind + '_display_provenance.csv'), index=False)
+            display_v.to_csv(out / ('omics_importance_' + kind + '_display.csv'))
+            for ax, values, provenance, title in [
+                    (axs[0], display_ref, ref_provenance, 'Paper Fig. 3a cancer-specific'),
+                    (axs[1], display_v, v_provenance, f'GATrans {kind} (fold 0)')]:
                 left = np.zeros(len(values))
                 for omic, color in zip(OMICS, COLORS):
                     ax.barh(np.arange(len(order)), values[omic], left=left, color=color, label=omic)
                     left += values[omic].fillna(0).to_numpy()
+                placeholder_rows = sorted(set(provenance.loc[provenance.source == PLACEHOLDER_LABEL, 'row']))
+                for row in placeholder_rows:
+                    if row in order:
+                        ax.text(.5, order.index(row), 'display placeholder', ha='center', va='center',
+                                fontsize=6, color='#222222')
                 ax.set_yticks(np.arange(len(order)), order)
                 ax.set_ylim(-.5, len(order)-.5)
                 ax.invert_yaxis()
                 ax.set(xlim=(0,1), xlabel='Normalized omics importance', title=title)
-            delta = v.reindex(order) - ref
+            delta = display_v - display_ref
             im = heat(axs[2], delta, 'Difference (descriptive)\nSHAP cohort/aggregation may differ', True, 1)
             fig.colorbar(im, ax=axs[2], fraction=.05)
             axs[0].legend(fontsize=7, loc='lower right')
@@ -195,15 +251,22 @@ def main():
                     continue
                 own = g.set_index('cancer')[[f'shap_{o}' for o in OMICS]].T
                 own.index = OMICS
-                own = own.reindex(columns=paper.columns)
+                paper_display, paper_provenance = display_complete(paper, index=OMICS, columns=paper.columns, fill=0.0)
+                own_display, own_provenance = display_complete(own, index=OMICS, columns=paper.columns, fill=0.0)
+                own.to_csv(out / ('gene_' + gene + '_' + kind + '_observed.csv'))
+                own_display.to_csv(out / ('gene_' + gene + '_' + kind + '_display.csv'))
+                paper_display.to_csv(out / ('paper_gene_' + gene + '_display.csv'))
+                own_provenance.to_csv(out / ('gene_' + gene + '_' + kind + '_display_provenance.csv'), index=False)
+                paper_provenance.to_csv(out / ('paper_gene_' + gene + '_display_provenance.csv'), index=False)
                 fig, axs = plt.subplots(2,1, figsize=(11,4.5))
-                lim = max(np.abs(paper.to_numpy()).max(), np.nanmax(np.abs(own.to_numpy())), 1e-8)
-                im_paper = heat(axs[0], paper, f'{gene}: original Fig. 3e, pan-cancer feature-split experiment', True, lim)
+                lim = max(np.abs(paper_display.to_numpy()).max(), np.abs(own_display.to_numpy()).max(), 1e-8)
+                im_paper = heat(axs[0], paper_display, f'{gene}: original Fig. 3e, pan-cancer feature-split experiment', True, lim)
+                mark_placeholders(axs[0], paper_provenance, list(paper_display.index), list(paper_display.columns))
                 fig.colorbar(im_paper, ax=axs[0], fraction=.025, label='Signed SHAP')
-                im = heat(axs[1], own, f'{gene}: GATrans {kind}, independently trained cancer models\nDifferent experiment; visual reference only', True, lim)
+                im = heat(axs[1], own_display, f'{gene}: GATrans {kind}, independently trained cancer models\nDifferent experiment; x marks are neutral display placeholders', True, lim)
+                mark_placeholders(axs[1], own_provenance, list(own_display.index), list(own_display.columns))
                 fig.colorbar(im, ax=axs[1], fraction=.025, label='Signed SHAP')
                 save(fig, out, 'gene_' + gene + '_' + kind)
-                own.to_csv(out / ('gene_' + gene + '_' + kind + '.csv'))
                 paper.to_csv(out / ('paper_gene_' + gene + '.csv'))
     if attention_frames:
         attention = pd.concat(attention_frames, ignore_index=True)
@@ -236,8 +299,15 @@ Fig. 3b, so only original counts are compared.
 Gene heatmaps show the original pan-cancer feature-split experiment alongside our
 cancer-specific models. They are different experiments, not pointwise replication.
 Specific candidates and attention plots are additional exploratory model analyses.
-Missing cancer/gene results stay missing. Nothing is filled from the paper.
+Observed cancer/gene result tables keep missing values. Nothing missing is filled
+from the paper into the model-output tables.
 The run_config.json and complete.json files distinguish pilot runs from ten-fold runs.
+For visual panels that need the same geometry as the paper, display-only hidden
+values are written to *_display.csv and their cell provenance is written to
+*_display_provenance.csv. These placeholders are neutral values: 0.25 per omics
+channel for normalized proportion bars and 0 for signed heatmaps or probability
+heatmaps. The corresponding *_observed.csv or paper_* files keep the real source
+values and missing cells unchanged.
 ''')
     print(f'Saved figures and comparison tables to {out.resolve()}')
 
