@@ -53,12 +53,14 @@ def metrics(labels, probs):
 
 def dependency_preflight(require_shap=True):
     """Import the numerical stack before a long run and report actionable failures."""
-    packages = ['numpy', 'scipy', 'scikit-learn', 'pandas', 'h5py', 'torch']
+    packages = ['numpy', 'scipy', 'scikit-learn', 'pandas', 'h5py', 'torch', 'torchvision']
     if require_shap:
         packages.append('shap')
     versions = {name: importlib.metadata.version(name) for name in packages}
     try:
         import scipy
+        import torch.onnx
+        import torchvision
         from sklearn.metrics import average_precision_score as _average_precision_score
         from sklearn.model_selection import StratifiedKFold as _StratifiedKFold
         if require_shap:
@@ -68,6 +70,12 @@ def dependency_preflight(require_shap=True):
             'The NumPy/SciPy installation is ABI-inconsistent. Run '
             '`bash scripts/repair_cloud_numeric_stack.sh` once; it installs only into '
             '/root/miniconda3 and never into /root/autodl-tmp.'
+        ) from error
+    except (ImportError, RuntimeError) as error:
+        raise RuntimeError(
+            'The PyTorch packages are not a compatible release family. Run '
+            '`bash scripts/repair_cloud_numeric_stack.sh` once to install the '
+            'validated torch 2.4.1 / torchvision 0.19.1 CUDA 12.1 combination.'
         ) from error
     return dict(python=sys.version.split()[0], executable=sys.executable,
                 prefix=sys.prefix, packages=versions, cuda_available=torch.cuda.is_available(),

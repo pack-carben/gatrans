@@ -42,6 +42,10 @@ except `/root/miniconda3` and never installs packages in `/root/autodl-tmp`.
 The cloud Python 3.12 image was verified with NumPy 2.1.3 and SciPy 1.14.1;
 the former NumPy 1.26.4 combination reproduced the FITPACK dtype recursion even
 when importing scikit-learn without loading any project code.
+The same repair also installs the official matching CUDA 12.1 family: PyTorch
+2.4.1, torchvision 0.19.1 and torchaudio 2.4.1. Preflight imports `torch.onnx`
+and torchvision compiled operators so mixed PyTorch releases are rejected before
+any real dataset is trained.
 
 Optional single-cancer integration check for debugging only (not a performance reproduction):
 
