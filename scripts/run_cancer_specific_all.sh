@@ -1,6 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# OpenMP reads this before Python can configure torch's thread pool. Preserve
+# valid user values (including nested-team lists); replace empty/invalid values.
+if [[ ! "${OMP_NUM_THREADS:-}" =~ ^[1-9][0-9]*(,[1-9][0-9]*)*$ ]]; then
+  if [[ -v OMP_NUM_THREADS ]]; then
+    echo 'Invalid OMP_NUM_THREADS; using 4.' >&2
+  fi
+  export OMP_NUM_THREADS=4
+fi
+
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 python_bin="${GATRANS_PYTHON:-/root/miniconda3/bin/python}"
 
