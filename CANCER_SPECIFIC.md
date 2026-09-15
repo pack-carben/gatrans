@@ -46,6 +46,10 @@ The same repair also installs the official matching CUDA 12.1 family: PyTorch
 2.4.1, torchvision 0.19.1 and torchaudio 2.4.1. Preflight imports `torch.onnx`
 and torchvision compiled operators so mixed PyTorch releases are rejected before
 any real dataset is trained.
+The repair removes only residual `torch`, `torchvision` and `torchaudio`
+directories under the validated `/root/miniconda3/.../site-packages` path after
+pip uninstall. This is necessary because the cloud image contained unowned
+PyTorch 2.8 exporter files that ordinary force-reinstall left in place.
 
 Optional single-cancer integration check for debugging only (not a performance reproduction):
 

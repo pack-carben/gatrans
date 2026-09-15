@@ -26,6 +26,20 @@ unset PYTHONPATH PYTHONHOME
 # Reinstall the official matching 2.4.1/CUDA 12.1 family so torch.onnx and
 # compiled torchvision operators come from one release.
 "$python_bin" -m pip uninstall --yes torch torchvision torchaudio
+
+site_packages="$($python_bin -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')"
+if [[ "$site_packages" != "/root/miniconda3/lib/python"*/site-packages ]]; then
+  echo "Refusing to clean unexpected site-packages path: $site_packages" >&2
+  exit 2
+fi
+for stale_package in torch torchvision torchaudio; do
+  stale_path="$site_packages/$stale_package"
+  if [[ -e "$stale_path" ]]; then
+    echo "Removing pip-unowned stale package directory: $stale_path"
+    rm -rf -- "$stale_path"
+  fi
+done
+
 "$python_bin" -m pip install --no-cache-dir \
   "torch==2.4.1" "torchvision==0.19.1" "torchaudio==2.4.1" \
   --index-url https://download.pytorch.org/whl/cu121
