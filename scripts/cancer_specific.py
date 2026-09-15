@@ -5,7 +5,6 @@ All outputs are kept under --out. Run on the cloud data disk.
 """
 import argparse
 import hashlib
-import importlib.metadata
 import json
 import os
 from pathlib import Path
@@ -23,7 +22,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from models import TREE
 from utils.io import load_h5, seed_everything
 from utils.data import split_from_masks
-from scripts.show_shap import FixedGraphFeatures
 
 OMICS = ['SNV', 'METH', 'GE', 'CNA']
 GENES = ['MUC1', 'KLF6', 'BAP1', 'CASP8', 'BRCA1', 'SGK1', 'ERBB4', 'MYC', 'TP53', 'TET2']
@@ -51,35 +49,6 @@ def metrics(labels, probs):
             'auprc_trapezoid': float(auc(recall, precision))}
 
 
-def dependency_preflight(require_shap=True):
-    """Import the numerical stack before a long run and report actionable failures."""
-    packages = ['numpy', 'scipy', 'scikit-learn', 'pandas', 'h5py', 'torch', 'torchvision']
-    if require_shap:
-        packages.append('shap')
-    versions = {name: importlib.metadata.version(name) for name in packages}
-    try:
-        import scipy
-        import torch.onnx
-        import torchvision
-        from sklearn.metrics import average_precision_score as _average_precision_score
-        from sklearn.model_selection import StratifiedKFold as _StratifiedKFold
-        if require_shap:
-            import shap
-    except RecursionError as error:
-        raise RuntimeError(
-            'The NumPy/SciPy installation is ABI-inconsistent. Run '
-            '`bash scripts/repair_cloud_numeric_stack.sh` once; it installs only into '
-            '/root/miniconda3 and never into /root/autodl-tmp.'
-        ) from error
-    except (ImportError, RuntimeError) as error:
-        raise RuntimeError(
-            'The PyTorch packages are not a compatible release family. Run '
-            '`bash scripts/repair_cloud_numeric_stack.sh` once to install the '
-            'validated torch 2.4.1 / torchvision 0.19.1 CUDA 12.1 combination.'
-        ) from error
-    return dict(python=sys.version.split()[0], executable=sys.executable,
-                prefix=sys.prefix, packages=versions, cuda_available=torch.cuda.is_available(),
-                cuda_version=torch.version.cuda)
 
 
 def discover_datasets(data_root, kinds, cancers=None, require_full=False):
@@ -188,6 +157,7 @@ def build_model(arrays, args):
 
 def explain(model, arrays, names, genes, labels, train_ids, test_ids, out, args):
     import shap
+    from scripts.show_shap import FixedGraphFeatures
     model.eval()
     rng = np.random.default_rng(args.seed)
     bg_ids = rng.choice(train_ids, min(args.background, len(train_ids)), replace=False)
@@ -319,6 +289,8 @@ def run_dataset(path, out, args):
         neighbors, spatial, degree = builder(data['network'], args.channels, args.neighbors, args.seed)
         np.savez_compressed(cache, neighbors=neighbors, spatial=spatial, degree=degree)
     arrays = dict(features=data['features'], neighbors=neighbors, spatial=spatial, degree=degree)
+    np.savez_compressed(dest / 'inputs.npz', features=data['features'], labels=labels,
+                        genes=np.asarray(genes), feature_names=np.asarray(names))
     del data['network']
     fold_predictions = []
     for fold, (train_index, val_index) in enumerate(splits[:args.folds]):
@@ -404,7 +376,7 @@ def main():
     p.add_argument('--seed', type=int, default=42)
     p.add_argument('--device', default='cuda')
     p.add_argument('--background', type=int, default=32)
-    p.add_argument('--shap-samples', type=int, default=200)
+    p.add_argument('--shap-samples', type=int, default=0, help='Training defaults to no SHAP; use shap_cancer_specific.py afterwards')
     p.add_argument('--shap-limit', type=int, default=0, help='0 explains every correctly predicted test cancer gene')
     p.add_argument('--resume', action='store_true', help='Allow a new Git revision with identical parameters/data; preserve provenance events')
     p.add_argument('--require-full-dataset', action='store_true',
@@ -419,12 +391,6 @@ def main():
     torch.set_num_threads(4)
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
-    try:
-        environment = dependency_preflight(require_shap=args.shap_samples > 0)
-    except Exception as error:
-        write_json(out / 'status.json', dict(status='environment_failed', error=str(error),
-                   executable=sys.executable, prefix=sys.prefix))
-        raise
     files = discover_datasets(args.data, args.kinds, args.cancers, args.require_full_dataset)
     manifest = [dict(network_kind=path.parent.name, cancer=path.name.split('_')[0],
                      input_file=str(path.resolve())) for path in files]
@@ -439,7 +405,7 @@ def main():
                 failures.append(dict(input_file=str(path.resolve()), error=str(error)))
                 traceback.print_exc()
         model_check = synthetic_model_check(args.device)
-        report = dict(status='passed' if not failures else 'failed', environment=environment,
+        report = dict(status='passed' if not failures else 'failed',
                       model_check=model_check, datasets_checked=len(reports), failures=failures,
                       datasets=reports)
         write_json(out / 'preflight.json', report)

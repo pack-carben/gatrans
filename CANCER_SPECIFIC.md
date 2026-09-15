@@ -1,5 +1,26 @@
 # Cancer-specific figure reproduction
 
+## Current two-step workflow
+
+No package installation or environment repair is part of either command.
+Use the existing `/root/miniconda3` interpreter. Training does not import SHAP,
+matplotlib, torchvision or ONNX and does not run environment preflight.
+
+```bash
+cd /root/autodl-tmp/gatrans
+bash scripts/run_cancer_specific_all.sh
+/root/miniconda3/bin/python scripts/shap_cancer_specific.py --run results/cancer_specific_all_v2
+```
+
+The first command trains all homogeneous and heterogeneous files. Each dataset
+saves `graph.npz` (walks, distances, degrees), `inputs.npz` (features, labels,
+gene/feature names), `run_config.json`, fold weights, splits and predictions.
+The second command restores these saved arrays and fold-0 weights to calculate
+SHAP without retraining. Older runs without `inputs.npz` require their original
+training inputs; this new explanation entry point reports those runs as missing
+inputs. The environment repair notes below describe earlier troubleshooting,
+not required training steps.
+
 This workflow evaluates **the PyTorch GATrans refactor** on the 16 homogeneous
 and 15 heterogeneous cancer-specific datasets from TREE. It is not a claim that
 the refactor is numerically identical to the TensorFlow architecture.
