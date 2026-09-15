@@ -243,13 +243,16 @@ def run_dataset(path, out, args):
     if signature_file.exists():
         prior = json.loads(signature_file.read_text())
         if prior != signature:
-            comparable = lambda config: {k:v for k,v in config.items() if k != 'git_commit'}
-            if not args.resume or comparable(prior) != comparable(signature):
-                raise ValueError(f'Run configuration changed; use a different output directory: {dest}')
+            training_keys = ('data_sha256', 'folds', 'epochs', 'patience', 'channels',
+                             'neighbors', 'layers', 'dropout', 'lr', 'batch_size', 'seed')
+            changed = {key: {'saved': prior.get(key), 'requested': signature.get(key)}
+                       for key in training_keys if prior.get(key) != signature.get(key)}
+            if changed:
+                raise ValueError(f'Training parameters changed in {dest}: {json.dumps(changed)}')
             events_path = dest / 'resume_events.json'
             events = json.loads(events_path.read_text()) if events_path.exists() else []
             events.append(dict(git_commit=signature['git_commit'], time=time.time(),
-                               reason='Explicit resume after code update; numerical settings and data hash unchanged'))
+                               reason='Resume with unchanged training parameters and data hash'))
             write_json(events_path, events)
     else:
         write_json(signature_file, signature)
