@@ -50,6 +50,9 @@ The repair removes only residual `torch`, `torchvision` and `torchaudio`
 directories under the validated `/root/miniconda3/.../site-packages` path after
 pip uninstall. This is necessary because the cloud image contained unowned
 PyTorch 2.8 exporter files that ordinary force-reinstall left in place.
+When the numerical stack already passes and only PyTorch files are mixed, use
+`bash scripts/repair_cloud_numeric_stack.sh --torch-only` to preserve NumPy,
+SciPy, pandas and h5py.
 
 Optional single-cancer integration check for debugging only (not a performance reproduction):
 

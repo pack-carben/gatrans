@@ -16,11 +16,23 @@ fi
 export TMPDIR=/tmp
 unset PYTHONPATH PYTHONHOME
 
+repair_numeric=true
+if [[ "${1:-}" == "--torch-only" ]]; then
+  repair_numeric=false
+  shift
+fi
+if [[ "$#" -ne 0 ]]; then
+  echo "Usage: $0 [--torch-only]" >&2
+  exit 2
+fi
+
 # Reinstall NumPy first, then binary consumers. This repairs stale wheels built or
 # installed against a different NumPy C ABI. No --target or data-disk path is used.
-"$python_bin" -m pip install --no-cache-dir --force-reinstall "numpy==2.1.3"
-"$python_bin" -m pip install --no-cache-dir --force-reinstall --no-deps \
-  "scipy==1.14.1" "scikit-learn==1.5.2" "pandas==2.2.2" "h5py==3.16.0"
+if [[ "$repair_numeric" == true ]]; then
+  "$python_bin" -m pip install --no-cache-dir --force-reinstall "numpy==2.1.3"
+  "$python_bin" -m pip install --no-cache-dir --force-reinstall --no-deps \
+    "scipy==1.14.1" "scikit-learn==1.5.2" "pandas==2.2.2" "h5py==3.16.0"
+fi
 
 # The base image may contain torchvision from a newer CUDA/PyTorch release.
 # Reinstall the official matching 2.4.1/CUDA 12.1 family so torch.onnx and
