@@ -39,6 +39,9 @@ real graph caches or train any dataset. If SciPy import raises a recursive NumPy
 dtype traceback, repair the existing Miniconda environment once with
 `bash scripts/repair_cloud_numeric_stack.sh`; this script rejects every prefix
 except `/root/miniconda3` and never installs packages in `/root/autodl-tmp`.
+The cloud Python 3.12 image was verified with NumPy 2.1.3 and SciPy 1.14.1;
+the former NumPy 1.26.4 combination reproduced the FITPACK dtype recursion even
+when importing scikit-learn without loading any project code.
 
 Optional single-cancer integration check for debugging only (not a performance reproduction):
 
