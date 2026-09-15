@@ -24,14 +24,23 @@ OOXML directly, preserving the source files. Optional PDF inspection uses pypdf.
 
 ## Commands
 
+The production entry point deliberately uses `/root/miniconda3/bin/python`,
+requires all 31 source files, and writes results only to the data disk repository:
+
 ```bash
-python scripts/paper_sources.py
-python -m unittest discover -s tests -v
-python -u scripts/cancer_specific.py --out results/cancer_specific_v1
-python scripts/plot_cancer_specific.py --run results/cancer_specific_v1
+bash scripts/run_cancer_specific_all.sh --preflight-only
+bash scripts/run_cancer_specific_all.sh
+python scripts/plot_cancer_specific.py --run results/cancer_specific_all_v2
 ```
 
-Short integration check (not a performance reproduction):
+The preflight command reads and audits all 16 homogeneous and 15 heterogeneous
+HDF5 files and runs a tiny synthetic forward/backward check. It does not build
+real graph caches or train any dataset. If SciPy import raises a recursive NumPy
+dtype traceback, repair the existing Miniconda environment once with
+`bash scripts/repair_cloud_numeric_stack.sh`; this script rejects every prefix
+except `/root/miniconda3` and never installs packages in `/root/autodl-tmp`.
+
+Optional single-cancer integration check for debugging only (not a performance reproduction):
 
 ```bash
 python -u scripts/cancer_specific.py --cancers BLCA --folds 1 --epochs 2 --shap-limit 4 --shap-samples 32 --out results/cancer_specific_smoke
@@ -98,3 +107,6 @@ Completion metadata distinguishes pilot runs from full fixed-configuration runs.
 After a reviewed code fix, `--resume` can retain completed folds with unchanged
 numerical arguments and data hashes. Original run provenance and new revision
 events are both preserved; partially trained folds restart from their seed.
+The full entry point records its exact 31-file manifest before work begins. A
+dataset-level error is written to `status.json` and the remaining cancers still
+run; the process exits nonzero after the complete collection has been attempted.

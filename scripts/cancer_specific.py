@@ -5,19 +5,19 @@ All outputs are kept under --out. Run on the cloud data disk.
 """
 import argparse
 import hashlib
+import importlib.metadata
 import json
 import os
 from pathlib import Path
 import subprocess
 import sys
 import time
+import traceback
 
 import h5py
 import numpy as np
 import pandas as pd
 import torch
-from sklearn.metrics import average_precision_score, roc_auc_score, precision_recall_curve, auc
-from sklearn.model_selection import StratifiedKFold
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from models import TREE
@@ -28,6 +28,7 @@ from scripts.show_shap import FixedGraphFeatures
 OMICS = ['SNV', 'METH', 'GE', 'CNA']
 GENES = ['MUC1', 'KLF6', 'BAP1', 'CASP8', 'BRCA1', 'SGK1', 'ERBB4', 'MYC', 'TP53', 'TET2']
 BUFFERS = {'node_feature', 'node_degree', 'node_neighbor', 'spatial_matrix'}
+EXPECTED_DATASETS = {'homogeneous': 16, 'heterogeneous': 15}
 
 
 def write_json(path, value):
@@ -42,10 +43,94 @@ def decode(items):
 
 
 def metrics(labels, probs):
+    from sklearn.metrics import average_precision_score, roc_auc_score, precision_recall_curve, auc
+
     precision, recall, _ = precision_recall_curve(labels, probs)
     return {'auroc': float(roc_auc_score(labels, probs)),
             'average_precision': float(average_precision_score(labels, probs)),
             'auprc_trapezoid': float(auc(recall, precision))}
+
+
+def dependency_preflight(require_shap=True):
+    """Import the numerical stack before a long run and report actionable failures."""
+    packages = ['numpy', 'scipy', 'scikit-learn', 'pandas', 'h5py', 'torch']
+    if require_shap:
+        packages.append('shap')
+    versions = {name: importlib.metadata.version(name) for name in packages}
+    try:
+        import scipy
+        from sklearn.metrics import average_precision_score as _average_precision_score
+        from sklearn.model_selection import StratifiedKFold as _StratifiedKFold
+        if require_shap:
+            import shap
+    except RecursionError as error:
+        raise RuntimeError(
+            'The NumPy/SciPy installation is ABI-inconsistent. Run '
+            '`bash scripts/repair_cloud_numeric_stack.sh` once; it installs only into '
+            '/root/miniconda3 and never into /root/autodl-tmp.'
+        ) from error
+    return dict(python=sys.version.split()[0], executable=sys.executable,
+                prefix=sys.prefix, packages=versions, cuda_available=torch.cuda.is_available(),
+                cuda_version=torch.version.cuda)
+
+
+def discover_datasets(data_root, kinds, cancers=None, require_full=False):
+    root = Path(data_root)
+    files = [path for kind in kinds for path in sorted((root / kind).glob('*_multiomics.h5'))
+             if not cancers or path.name.split('_')[0] in cancers]
+    if not files:
+        raise FileNotFoundError(f'No matching datasets under {root}')
+    keys = [(path.parent.name, path.name.split('_')[0]) for path in files]
+    if len(keys) != len(set(keys)):
+        raise ValueError('Duplicate cancer/network datasets discovered')
+    if require_full:
+        if cancers:
+            raise ValueError('--require-full-dataset cannot be combined with --cancers')
+        actual = {kind: sum(path.parent.name == kind for path in files) for kind in kinds}
+        expected = {kind: EXPECTED_DATASETS[kind] for kind in kinds}
+        if actual != expected:
+            raise ValueError(f'Incomplete cancer-specific collection: expected {expected}, found {actual}')
+    return files
+
+
+def audit_dataset(path, data_root):
+    data = load_h5(path)
+    kind, cancer = path.parent.name, path.name.split('_')[0]
+    names, naming_note = feature_names(data, cancer, kind, Path(data_root))
+    labels = data['y_train'].reshape(-1).copy()
+    for split in ('val', 'test'):
+        labels[data['mask_' + split]] = data['y_' + split].reshape(-1)[data['mask_' + split]]
+    tr, _, va, _, test_ids, _ = split_from_masks(
+        labels, data['mask_train'], data['mask_val'], data['mask_test'])
+    pool = np.sort(np.concatenate([tr, va]))
+    genes = decode(data['gene_names'])
+    if len(set(genes)) != len(genes):
+        raise ValueError('Duplicate gene names: grouped splitting required')
+    if not np.isfinite(data['features']).all() or not np.isfinite(data['network']).all():
+        raise ValueError('Non-finite input arrays')
+    class_counts = np.bincount(labels[pool].astype(int), minlength=2)
+    if class_counts.min() < 10:
+        raise ValueError('Insufficient class members for ten-fold CV')
+    return dict(network_kind=kind, cancer=cancer, nodes=len(genes), features=len(names),
+                naming_note=naming_note, train_pool=len(pool), test=len(test_ids),
+                train_class_counts=class_counts.tolist(), test_positive=int(labels[test_ids].sum()),
+                input_file=str(path.resolve()))
+
+
+def synthetic_model_check(device):
+    """Exercise model construction and gradients without touching a real training split."""
+    nodes = 6
+    features = np.arange(nodes * 4, dtype=np.float32).reshape(nodes, 4) / 10
+    degree = np.full(nodes, 2, dtype=np.int64)
+    neighbors = np.stack([np.roll(np.arange(nodes), -i)[:3] for i in range(nodes)])[:, None, :]
+    spatial = np.zeros((nodes, 1, 3, 3), dtype=np.float32)
+    model = TREE(features, degree, neighbors, spatial, n_graphs=1, n_neighbors=3,
+                 d_model=8, n_layers=1, num_heads=2, dff=16, d_sp_enc=8, dropout=0).to(device)
+    output = model(torch.arange(nodes, device=device))
+    output.sum().backward()
+    if output.shape != (nodes,) or not torch.isfinite(output).all():
+        raise RuntimeError('Synthetic model check produced invalid output')
+    return dict(device=str(device), output_shape=list(output.shape))
 
 
 def feature_names(data, cancer, kind, root):
@@ -192,7 +277,7 @@ def run_dataset(path, out, args):
         write_json(signature_file, signature)
     if (dest / 'complete.json').exists():
         print(f'Already complete: {kind}/{cancer}', flush=True)
-        return
+        return 'already_complete'
     started = time.time()
     data = load_h5(path)
     names, naming_note = feature_names(data, cancer, kind, Path(args.data))
@@ -206,6 +291,7 @@ def run_dataset(path, out, args):
         raise ValueError('Duplicate gene names: grouped splitting required')
     if not np.isfinite(data['features']).all():
         raise ValueError('Non-finite input features')
+    from sklearn.model_selection import StratifiedKFold
     splits = list(StratifiedKFold(10, shuffle=True, random_state=args.seed).split(pool, labels[pool]))
     if min(np.bincount(labels[pool].astype(int))) < 10:
         raise ValueError('Insufficient class members for ten-fold CV')
@@ -289,6 +375,7 @@ def run_dataset(path, out, args):
     write_json(dest / 'complete.json', dict(folds=args.folds, seconds=time.time()-started,
                status='full_fixed_configuration' if args.folds == 10 and args.epochs == 100 else 'pilot',
                hyperparameter_search=False))
+    return 'completed'
 
 
 def main():
@@ -312,24 +399,69 @@ def main():
     p.add_argument('--shap-samples', type=int, default=200)
     p.add_argument('--shap-limit', type=int, default=0, help='0 explains every correctly predicted test cancer gene')
     p.add_argument('--resume', action='store_true', help='Allow a new Git revision with identical parameters/data; preserve provenance events')
+    p.add_argument('--require-full-dataset', action='store_true',
+                   help='Require exactly 16 homogeneous and 15 heterogeneous files; rejects --cancers')
+    p.add_argument('--preflight-only', action='store_true',
+                   help='Validate dependencies, model construction and every HDF5 file without training')
+    p.add_argument('--fail-fast', action='store_true',
+                   help='Stop after the first dataset failure instead of auditing the complete collection')
     args = p.parse_args()
     if not 1 <= args.folds <= 10 or min(args.epochs, args.patience, args.channels, args.neighbors, args.layers, args.batch_size, args.background) < 1:
         p.error('Invalid run sizes')
     torch.set_num_threads(4)
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
-    files = [path for kind in args.kinds for path in sorted((Path(args.data) / kind).glob('*_multiomics.h5'))
-             if not args.cancers or path.name.split('_')[0] in args.cancers]
-    if not files:
-        raise FileNotFoundError('No matching datasets')
+    try:
+        environment = dependency_preflight(require_shap=args.shap_samples > 0)
+    except Exception as error:
+        write_json(out / 'status.json', dict(status='environment_failed', error=str(error),
+                   executable=sys.executable, prefix=sys.prefix))
+        raise
+    files = discover_datasets(args.data, args.kinds, args.cancers, args.require_full_dataset)
+    manifest = [dict(network_kind=path.parent.name, cancer=path.name.split('_')[0],
+                     input_file=str(path.resolve())) for path in files]
+    write_json(out / 'dataset_manifest.json', dict(total=len(files), datasets=manifest))
+    if args.preflight_only:
+        reports, failures = [], []
+        for index, path in enumerate(files, 1):
+            print(f'Preflight {index}/{len(files)} {path.parent.name}/{path.name.split("_")[0]}', flush=True)
+            try:
+                reports.append(audit_dataset(path, args.data))
+            except Exception as error:
+                failures.append(dict(input_file=str(path.resolve()), error=str(error)))
+                traceback.print_exc()
+        model_check = synthetic_model_check(args.device)
+        report = dict(status='passed' if not failures else 'failed', environment=environment,
+                      model_check=model_check, datasets_checked=len(reports), failures=failures,
+                      datasets=reports)
+        write_json(out / 'preflight.json', report)
+        write_json(out / 'status.json', dict(status='preflight_' + report['status'],
+                   total_datasets=len(files), datasets_checked=len(reports), failures=len(failures)))
+        if failures:
+            raise RuntimeError(f'Preflight failed for {len(failures)} of {len(files)} datasets')
+        print(f'Preflight passed for all {len(files)} datasets; no training was started.', flush=True)
+        return
+    outcomes, failures = [], []
     for path in files:
-        write_json(out / 'status.json', dict(status='running', dataset=str(path), total_datasets=len(files)))
+        write_json(out / 'status.json', dict(status='running', dataset=str(path),
+                   total_datasets=len(files), outcomes=outcomes, failures=failures))
         try:
-            run_dataset(path, out, args)
+            outcome = run_dataset(path, out, args)
+            outcomes.append(dict(network_kind=path.parent.name, cancer=path.name.split('_')[0], status=outcome))
         except Exception as error:
-            write_json(out / 'status.json', dict(status='failed', dataset=str(path), error=str(error)))
-            raise
-    write_json(out / 'status.json', dict(status='completed', datasets=len(files)))
+            failure = dict(network_kind=path.parent.name, cancer=path.name.split('_')[0],
+                           input_file=str(path.resolve()), error=str(error))
+            failures.append(failure)
+            traceback.print_exc()
+            write_json(out / 'status.json', dict(status='running_with_failures', dataset=str(path),
+                       total_datasets=len(files), outcomes=outcomes, failures=failures))
+            if args.fail_fast:
+                raise
+    final_status = 'completed' if not failures else 'completed_with_failures'
+    write_json(out / 'status.json', dict(status=final_status, total_datasets=len(files),
+               successful=len(outcomes), failures=failures, outcomes=outcomes))
+    if failures:
+        raise RuntimeError(f'{len(failures)} of {len(files)} datasets failed; see status.json')
 
 
 if __name__ == '__main__':
