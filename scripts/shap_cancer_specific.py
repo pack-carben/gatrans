@@ -11,6 +11,35 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from scripts.cancer_specific import build_model, explain, seed_everything
 
 
+def explain_dataset(config, options):
+    """Explain one saved dataset and return its identity for the caller."""
+    config = Path(config)
+    dest = config.parent
+    args = argparse.Namespace(**json.loads(config.read_text()))
+    vars(args).update(vars(options) if isinstance(options, argparse.Namespace) else options)
+    seed_everything(args.seed)
+    with np.load(dest / 'inputs.npz') as saved:
+        features, labels = saved['features'], saved['labels']
+        genes, names = saved['genes'].tolist(), saved['feature_names'].tolist()
+    with np.load(dest / 'graph.npz') as graph:
+        arrays = dict(features=features, **{key: graph[key] for key in graph.files})
+    with np.load(dest / 'fold_00/split.npz') as split:
+        train_ids, test_ids = split['train'], split['test']
+    model = build_model(arrays, args)
+    try:
+        weights = torch.load(dest / 'fold_00/weights.pt', weights_only=True, map_location=args.device)
+        # Merge saved parameters with the graph buffers restored above.
+        state = model.state_dict()
+        state.update(weights)
+        model.load_state_dict(state)
+        explain(model, arrays, names, genes, labels, train_ids, test_ids, dest, args)
+    finally:
+        del model
+        if str(args.device).startswith('cuda'):
+            torch.cuda.empty_cache()
+    return {'kind': dest.parent.name, 'cancer': dest.name}
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--run', default='results/cancer_specific_all_full_sp')
@@ -28,24 +57,7 @@ def main():
         dest = config.parent
         print(f'SHAP {dest.parent.name}/{dest.name}', flush=True)
         try:
-            args = argparse.Namespace(**json.loads(config.read_text()))
-            vars(args).update(vars(options))
-            seed_everything(args.seed)
-            with np.load(dest / 'inputs.npz') as saved:
-                features, labels = saved['features'], saved['labels']
-                genes, names = saved['genes'].tolist(), saved['feature_names'].tolist()
-            with np.load(dest / 'graph.npz') as graph:
-                arrays = dict(features=features, **{key: graph[key] for key in graph.files})
-            with np.load(dest / 'fold_00/split.npz') as split:
-                train_ids, test_ids = split['train'], split['test']
-            model = build_model(arrays, args)
-            weights = torch.load(dest / 'fold_00/weights.pt', weights_only=True, map_location=args.device)
-            # Merge saved parameters with the graph buffers restored above.
-            state = model.state_dict()
-            state.update(weights)
-            model.load_state_dict(state)
-            explain(model, arrays, names, genes, labels, train_ids, test_ids, dest, args)
-            del model
+            explain_dataset(config, options)
         except Exception as error:
             print(f'FAILED {dest}: {error}', file=sys.stderr, flush=True)
             failures.append(str(dest))

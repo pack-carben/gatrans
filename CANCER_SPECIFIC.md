@@ -27,12 +27,14 @@ cannot collide with a running serial job:
 
 ```bash
 /root/miniconda3/bin/python scripts/train_cancer_specific_parallel.py --workers 2
-/root/miniconda3/bin/python scripts/shap_cancer_specific.py --run results/cancer_specific_parallel_full_sp
+/root/miniconda3/bin/python scripts/shap_cancer_specific_parallel.py --workers 2
 ```
 
 Each worker uses one CPU thread and one CUDA process. Start with two workers and
 increase to four only if GPU memory remains comfortable. A lock file prevents
-two parallel launchers from writing the same output directory.
+two parallel launchers from writing the same output directory. The SHAP launcher
+uses the training launcher's default result directory; pass the same `--run`
+explicitly when training used a custom `--out` directory.
 
 This workflow evaluates **the PyTorch GATrans refactor** on the 16 homogeneous
 and 15 heterogeneous cancer-specific datasets from TREE. It is not a claim that
