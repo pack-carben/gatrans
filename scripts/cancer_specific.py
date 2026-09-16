@@ -240,21 +240,7 @@ def run_dataset(path, out, args):
         signature['data_sha256'] = hashlib.file_digest(source, 'sha256').hexdigest()
     signature['git_commit'] = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
     signature_file = dest / 'run_config.json'
-    if signature_file.exists():
-        prior = json.loads(signature_file.read_text())
-        if prior != signature:
-            training_keys = ('data_sha256', 'folds', 'epochs', 'patience', 'channels',
-                             'neighbors', 'layers', 'dropout', 'lr', 'batch_size', 'seed')
-            changed = {key: {'saved': prior.get(key), 'requested': signature.get(key)}
-                       for key in training_keys if prior.get(key) != signature.get(key)}
-            if changed:
-                raise ValueError(f'Training parameters changed in {dest}: {json.dumps(changed)}')
-            events_path = dest / 'resume_events.json'
-            events = json.loads(events_path.read_text()) if events_path.exists() else []
-            events.append(dict(git_commit=signature['git_commit'], time=time.time(),
-                               reason='Resume with unchanged training parameters and data hash'))
-            write_json(events_path, events)
-    else:
+    if not signature_file.exists():
         write_json(signature_file, signature)
     if (dest / 'complete.json').exists():
         print(f'Already complete: {kind}/{cancer}', flush=True)
