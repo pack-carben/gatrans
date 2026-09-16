@@ -9,7 +9,7 @@ matplotlib, torchvision or ONNX and does not run environment preflight.
 ```bash
 cd /root/autodl-tmp/gatrans
 bash scripts/run_cancer_specific_all.sh
-/root/miniconda3/bin/python scripts/shap_cancer_specific.py --run results/cancer_specific_all_v2
+/root/miniconda3/bin/python scripts/shap_cancer_specific.py --run results/cancer_specific_all_full_sp
 ```
 
 The first command trains all homogeneous and heterogeneous files. Each dataset
@@ -27,7 +27,7 @@ cannot collide with a running serial job:
 
 ```bash
 /root/miniconda3/bin/python scripts/train_cancer_specific_parallel.py --workers 2
-/root/miniconda3/bin/python scripts/shap_cancer_specific.py --run results/cancer_specific_parallel
+/root/miniconda3/bin/python scripts/shap_cancer_specific.py --run results/cancer_specific_parallel_full_sp
 ```
 
 Each worker uses one CPU thread and one CUDA process. Start with two workers and
@@ -64,7 +64,7 @@ requires all 31 source files, and writes results only to the data disk repositor
 ```bash
 bash scripts/run_cancer_specific_all.sh --preflight-only
 bash scripts/run_cancer_specific_all.sh
-python scripts/plot_cancer_specific.py --run results/cancer_specific_all_v2
+python scripts/plot_cancer_specific.py --run results/cancer_specific_all_full_sp
 ```
 
 The preflight command reads and audits all 16 homogeneous and 15 heterogeneous
@@ -144,8 +144,10 @@ may include training genes and are excluded from held-out cohort statistics.
 Heterogeneous inputs retain all 64 provided features and the supplied topology.
 The current refactor uses a shared feature projection and untyped random walks,
 not the original type-specific feature projections or dedicated metapath runs.
-Distances are within sampled induced subgraphs. Attention is descriptive, not
-causal; this workflow does not infer node types from gene names.
+Distances between sampled nodes are exact shortest paths through the complete
+network. CUDA computes them with batched multi-source BFS and retains only the
+sampled pairs, avoiding a dense on-disk N-by-N matrix. Attention is descriptive,
+not causal; this workflow does not infer node types from gene names.
 
 The published baseline numbers are not retrained baselines. AP and trapezoidal
 AUPRC are both exported to expose metric-definition differences. Seeds, hashes,

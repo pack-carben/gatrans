@@ -41,16 +41,17 @@ python -m unittest discover -s tests -v
 Labels may have shape `(N,)` or `(N, 1)`. Train, validation, and test masks must
 be nonempty, disjoint, and each contain both classes for ROC AUC evaluation.
 Missing validation masks are rejected instead of evaluating on the training set.
-Regenerate processed data after updating the sampled shortest-path calculation:
-repeated occurrences of the same node now have distance zero and identical
-distances to other nodes.
+Regenerate processed data after updating shortest-path code. Distances between
+sampled nodes are measured through the complete network; repeated occurrences
+of the same node have distance zero and identical distances to other nodes.
 
 RAPIDS/cuGraph support is optional and should be installed only on a compatible
 Linux CUDA server with `requirements-rapids-cu12.txt`.
 The current `--engine cugraph` option only constructs a GPU graph; sampled walks
 and shortest-path calculations still use the CPU implementation.
-Use `--engine cuda` for actual GPU random-walk sampling and batched shortest-path
-computation through PyTorch, without RAPIDS. Reduce `--graph-batch-size` if batch
-memory is limited; the full adjacency and its neighbor indices must still fit
-in GPU memory. CPU and CUDA use different random generators, so sampled walks
-need not match across engines; distances for identical walks are tested to agree.
+Use `--engine cuda` for GPU random-walk sampling and exact full-network shortest
+paths through batched multi-source BFS in PyTorch, without RAPIDS. Only distances
+for sampled node pairs are retained; a dense N-by-N distance file is not written.
+Reduce `--graph-batch-size` if GPU memory is limited. CPU and CUDA use different
+random generators, so sampled walks need not match across engines; distances for
+identical walks are tested to agree.

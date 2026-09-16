@@ -5,7 +5,7 @@ import torch
 
 from models import TREE
 from utils.data import NodeDataset, split_from_masks
-from utils.preprocess import build_subgraphs, shortest_path_in_subgraph
+from utils.preprocess import build_subgraphs, shortest_path_in_graph
 from utils.cuda_preprocess import build_subgraphs_cuda, sampled_distances
 
 
@@ -24,7 +24,7 @@ class RegressionTests(unittest.TestCase):
                 self.assertEqual(walk[0], node)
                 for source, target in zip(walk[:-1], walk[1:]):
                     self.assertTrue(adjacency[source, target] or (degrees[source] == 0 and source == target))
-                np.testing.assert_array_equal(distances[node, channel], shortest_path_in_subgraph(walk, neighbors))
+                np.testing.assert_array_equal(distances[node, channel], shortest_path_in_graph(walk, neighbors))
         repeated, _, _ = build_subgraphs_cuda(adjacency, 3, 8, batch_size=7)
         np.testing.assert_array_equal(nodes, repeated)
 
@@ -40,7 +40,7 @@ class RegressionTests(unittest.TestCase):
         np.testing.assert_array_equal(sampled_distances(adjacency, walks).numpy()[0],
                                       [[0, 1, 0, -1], [-1, 0, -1, -1], [0, 1, 0, -1], [-1, -1, -1, 0]])
 
-    def test_distances_match_scipy_on_sampled_directed_graphs(self):
+    def test_distances_match_full_graph_scipy(self):
         from scipy.sparse.csgraph import shortest_path
 
         rng = np.random.default_rng(42)
@@ -49,21 +49,27 @@ class RegressionTests(unittest.TestCase):
             np.fill_diagonal(adjacency, False)
             neighbors = [np.flatnonzero(row) for row in adjacency]
             sampled = rng.integers(0, 12, size=8)
-            unique, inverse = np.unique(sampled, return_inverse=True)
-            expected = shortest_path(adjacency[np.ix_(unique, unique)].astype(float),
-                                     directed=True, unweighted=True)
-            expected = expected[np.ix_(inverse, inverse)]
+            all_distances = shortest_path(adjacency.astype(float), directed=True, unweighted=True)
+            expected = all_distances[np.ix_(sampled, sampled)]
             expected[~np.isfinite(expected)] = -1
-            np.testing.assert_array_equal(shortest_path_in_subgraph(sampled, neighbors), expected)
+            np.testing.assert_array_equal(shortest_path_in_graph(sampled, neighbors), expected)
+
+    def test_paths_can_leave_sampled_nodes(self):
+        adjacency = np.array([[0, 0, 1], [0, 0, 0], [0, 1, 0]], dtype=bool)
+        neighbors = [np.flatnonzero(row) for row in adjacency]
+        sampled = np.array([0, 1])
+        np.testing.assert_array_equal(shortest_path_in_graph(sampled, neighbors), [[0, 2], [-1, 0]])
+        actual = sampled_distances(torch.as_tensor(adjacency), torch.as_tensor([sampled]), 2)
+        np.testing.assert_array_equal(actual.numpy()[0], [[0, 2], [-1, 0]])
 
     def test_repeated_nodes_have_identical_distances(self):
-        actual = shortest_path_in_subgraph(
+        actual = shortest_path_in_graph(
             np.array([0, 1, 0]), [np.array([1]), np.array([0])]
         )
         np.testing.assert_array_equal(actual, [[0, 1, 0], [1, 0, 1], [0, 1, 0]])
 
     def test_isolated_repeated_node(self):
-        actual = shortest_path_in_subgraph(np.array([0, 0, 0]), [np.array([], dtype=int)])
+        actual = shortest_path_in_graph(np.array([0, 0, 0]), [np.array([], dtype=int)])
         np.testing.assert_array_equal(actual, np.zeros((3, 3)))
 
     def test_column_labels_forward_backward(self):

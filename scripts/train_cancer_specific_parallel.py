@@ -31,7 +31,7 @@ def main():
     parser.add_argument('--workers', type=int, default=2,
                         help='Number of datasets trained at the same time (start with 2; try up to 4)')
     parser.add_argument('--data', default='dataset/cancer_specific')
-    parser.add_argument('--out', default='results/cancer_specific_parallel')
+    parser.add_argument('--out', default='results/cancer_specific_parallel_full_sp')
     args = parser.parse_args()
     if args.workers < 1:
         parser.error('--workers must be at least 1')

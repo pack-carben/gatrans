@@ -27,18 +27,11 @@ def random_walk(start: int, neighbors: List[np.ndarray], walk_length: int) -> Li
     return walk
 
 
-def shortest_path_in_subgraph(seed_nodes: np.ndarray, neighbors: List[np.ndarray]) -> np.ndarray:
-    """Compute distances only inside one sampled subgraph to avoid an N x N matrix."""
+def shortest_path_in_graph(seed_nodes: np.ndarray, neighbors: List[np.ndarray]) -> np.ndarray:
+    """Extract exact full-network distances for pairs in one sampled walk."""
     index = {}
     for pos, node in enumerate(seed_nodes):
         index.setdefault(int(node), []).append(pos)
-    unique_nodes = np.asarray(list(index), dtype=np.int64)
-    # Intersect once per unique node, rather than scanning full-graph neighbors
-    # again at every BFS depth and for every repeated random-walk occurrence.
-    local_neighbors = {
-        int(node): unique_nodes[np.isin(unique_nodes, neighbors[int(node)], assume_unique=True)]
-        for node in unique_nodes
-    }
     size = len(seed_nodes)
     distance = np.full((size, size), -1, dtype=np.float32)
 
@@ -47,19 +40,27 @@ def shortest_path_in_subgraph(seed_nodes: np.ndarray, neighbors: List[np.ndarray
         queue = deque([(int(source_node), 0)])
         seen = {int(source_node)}
         distance[source_pos, index[int(source_node)]] = 0
+        remaining = set(index) - {int(source_node)}
 
-        while queue:
+        while queue and remaining:
             node, depth = queue.popleft()
-            for nxt in local_neighbors[node]:
+            for nxt in neighbors[node]:
                 nxt = int(nxt)
-                if nxt not in index or nxt in seen:
+                if nxt in seen:
                     continue
                 seen.add(nxt)
-                distance[source_pos, index[nxt]] = depth + 1
                 queue.append((nxt, depth + 1))
+                if nxt in remaining:
+                    distance[source_pos, index[nxt]] = depth + 1
+                    remaining.remove(nxt)
         distance[source_positions] = distance[source_pos]
 
     return distance
+
+
+def shortest_path_in_subgraph(seed_nodes: np.ndarray, neighbors: List[np.ndarray]) -> np.ndarray:
+    """Backward-compatible name; distances now traverse the complete graph."""
+    return shortest_path_in_graph(seed_nodes, neighbors)
 
 
 def build_subgraphs(
@@ -88,7 +89,7 @@ def build_subgraphs(
         for graph_id in range(n_graphs):
             walk = np.asarray(random_walk(node_id, neighbors, n_neighbors), dtype=np.int64)
             node_neighbor[node_id, graph_id] = walk
-            spatial_matrix[node_id, graph_id] = shortest_path_in_subgraph(walk, neighbors)
+            spatial_matrix[node_id, graph_id] = shortest_path_in_graph(walk, neighbors)
 
     print(f"Graph preprocessing completed in {time.perf_counter() - started:.2f}s", flush=True)
     return node_neighbor, spatial_matrix, degrees

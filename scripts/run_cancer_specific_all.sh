@@ -27,7 +27,7 @@ fi
 cd "$repo_dir"
 exec "$python_bin" -u scripts/cancer_specific.py \
   --data dataset/cancer_specific \
-  --out results/cancer_specific_all_v2 \
+  --out results/cancer_specific_all_full_sp \
   --kinds homogeneous heterogeneous \
   --require-full-dataset \
   "$@"

@@ -13,7 +13,7 @@ from scripts.cancer_specific import build_model, explain, seed_everything
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--run', default='results/cancer_specific_all_v2')
+    parser.add_argument('--run', default='results/cancer_specific_all_full_sp')
     parser.add_argument('--device', default='cuda')
     parser.add_argument('--background', type=int, default=32)
     parser.add_argument('--shap-samples', type=int, default=200)

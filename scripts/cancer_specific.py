@@ -27,6 +27,7 @@ OMICS = ['SNV', 'METH', 'GE', 'CNA']
 GENES = ['MUC1', 'KLF6', 'BAP1', 'CASP8', 'BRCA1', 'SGK1', 'ERBB4', 'MYC', 'TP53', 'TET2']
 BUFFERS = {'node_feature', 'node_degree', 'node_neighbor', 'spatial_matrix'}
 EXPECTED_DATASETS = {'homogeneous': 16, 'heterogeneous': 15}
+GRAPH_DISTANCE_SCOPE = 'full_network_v1'
 
 
 def write_json(path, value):
@@ -236,13 +237,18 @@ def run_dataset(path, out, args):
     dest = out / kind / cancer
     dest.mkdir(parents=True, exist_ok=True)
     signature = {k: v for k, v in vars(args).items() if k not in ('out', 'cancers', 'kinds', 'resume')}
+    signature['graph_distance_scope'] = GRAPH_DISTANCE_SCOPE
     with path.open('rb') as source:
         signature['data_sha256'] = hashlib.file_digest(source, 'sha256').hexdigest()
     signature['git_commit'] = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
     signature_file = dest / 'run_config.json'
     if not signature_file.exists():
         write_json(signature_file, signature)
-    if (dest / 'complete.json').exists():
+    complete_file = dest / 'complete.json'
+    if complete_file.exists():
+        completed = json.loads(complete_file.read_text())
+        if completed.get('graph_distance_scope') != GRAPH_DISTANCE_SCOPE:
+            raise RuntimeError(f'{dest} was trained with the previous distance method; use a new output directory')
         print(f'Already complete: {kind}/{cancer}', flush=True)
         return 'already_complete'
     started = time.time()
@@ -265,18 +271,25 @@ def run_dataset(path, out, args):
     write_json(dest / 'data_audit.json', dict(network_kind=kind, cancer=cancer, nodes=len(genes),
                features=len(names), naming_note=naming_note, feature_names=names,
                train_pool=len(pool), test=len(test_ids), test_positive=int(labels[test_ids].sum()),
-               input_file=str(path.resolve()), graph_sampling='untyped random walks; induced-subgraph shortest paths',
+               input_file=str(path.resolve()), graph_sampling='untyped random walks; exact full-network shortest paths',
                model='PyTorch GATrans refactor; shared projection; not original TensorFlow TREE'))
     cache = dest / 'graph.npz'
+    cache_valid = False
     if cache.exists():
         with np.load(cache) as z:
-            neighbors, spatial, degree = z['neighbors'], z['spatial'], z['degree']
-    else:
+            scope = z['distance_scope'].item() if 'distance_scope' in z.files else None
+            if scope == GRAPH_DISTANCE_SCOPE:
+                neighbors, spatial, degree = z['neighbors'], z['spatial'], z['degree']
+                cache_valid = True
+        if not cache_valid and any(dest.glob('fold_*/metrics.json')):
+            raise RuntimeError(f'{dest} contains trained folds from the previous distance method; use a new output directory')
+    if not cache_valid:
         from utils.cuda_preprocess import build_subgraphs_cuda
         from utils.preprocess import build_subgraphs
         builder = build_subgraphs_cuda if args.device.startswith('cuda') else build_subgraphs
         neighbors, spatial, degree = builder(data['network'], args.channels, args.neighbors, args.seed)
-        np.savez_compressed(cache, neighbors=neighbors, spatial=spatial, degree=degree)
+        np.savez_compressed(cache, neighbors=neighbors, spatial=spatial, degree=degree,
+                            distance_scope=np.asarray(GRAPH_DISTANCE_SCOPE))
     arrays = dict(features=data['features'], neighbors=neighbors, spatial=spatial, degree=degree)
     np.savez_compressed(dest / 'inputs.npz', features=data['features'], labels=labels,
                         genes=np.asarray(genes), feature_names=np.asarray(names))
@@ -343,7 +356,7 @@ def run_dataset(path, out, args):
         del model
     write_json(dest / 'complete.json', dict(folds=args.folds, seconds=time.time()-started,
                status='full_fixed_configuration' if args.folds == 10 and args.epochs == 100 else 'pilot',
-               hyperparameter_search=False))
+               hyperparameter_search=False, graph_distance_scope=GRAPH_DISTANCE_SCOPE))
     return 'completed'
 
 
