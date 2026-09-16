@@ -21,6 +21,19 @@ training inputs; this new explanation entry point reports those runs as missing
 inputs. The environment repair notes below describe earlier troubleshooting,
 not required training steps.
 
+For several independent datasets on one GPU, use the Python parallel launcher.
+Its output layout is identical, but it defaults to a separate directory so it
+cannot collide with a running serial job:
+
+```bash
+/root/miniconda3/bin/python scripts/train_cancer_specific_parallel.py --workers 2
+/root/miniconda3/bin/python scripts/shap_cancer_specific.py --run results/cancer_specific_parallel
+```
+
+Each worker uses one CPU thread and one CUDA process. Start with two workers and
+increase to four only if GPU memory remains comfortable. A lock file prevents
+two parallel launchers from writing the same output directory.
+
 This workflow evaluates **the PyTorch GATrans refactor** on the 16 homogeneous
 and 15 heterogeneous cancer-specific datasets from TREE. It is not a claim that
 the refactor is numerically identical to the TensorFlow architecture.
